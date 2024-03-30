@@ -1,0 +1,300 @@
+---
+title: "HuYu2_TimeSeries1"
+author: "Zhaowei Cai"
+date: 'Mar 26,2024 - Mar 29, 2024'
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+
+# Loading packages
+```{r}
+library(tseries)
+library(forecast)
+library(stringr)
+library(PerformanceAnalytics)
+library(xts)
+```
+
+# Part 1
+```{r}
+set.seed(123)
+#create a time series with right observations and first element is 0
+ts_sim <- arima.sim(list(order = c(1,1,0), ar=0.65), n = 635)
+
+left <- 600
+right <- 636
+it <- left:right
+```
+
+
+```{r}
+plot(ts_sim, col=4, las=1)
+abline(v=c(1, left, right), lty="dotted", col=4)
+```
+
+# Part 2
+
+
+```{r}
+myts = subset(ts_sim, subset=rep(c(TRUE, FALSE), times=c(600, 36)))
+```
+
+## Step 1: visualize myts
+```{r}
+plot.zoo(myts, col=4, las=1, main="Time Series")
+```
+## Step 2: unit root test (augmented Dickey-Fuller) of myts
+```{r}
+adf.test(myts, alternative = 'stationary')
+```
+P-value greater than 0.05, not reject H0, and it is not stationary.
+
+## Step 3: differentiate myts, creating mydts
+```{r}
+mydts = diff(myts)
+```
+
+## Step 4: unit root test (augmented Dickey-Fuller) of mydts
+```{r}
+adf.test(mydts, alternative = 'stationary')
+```
+P-value less than 0.05, reject H0, and it is stationary.
+
+## Step 5: identify lags for mydts
+```{r}
+par(mfrow=c(1,2), mar=c(5,4,3,3))
+acf(mydts)
+pacf(mydts)
+```
+ACF decreases slowly, but PACF shows that it is an AR(1) (lag=1 is relevant only).
+
+## Step 6: train the model with auto.arima for mydts
+```{r}
+fit_mydts = auto.arima(
+  mydts,
+  max.p = 3,
+  max.q = 3,
+  ic = "aicc",
+  seasonal = FALSE,
+  stationary = TRUE,
+  lambda = NULL,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+summary(fit_mydts)
+```
+
+## Step 7: fit the original time series, i.e. myts
+
+```{r}
+fit_myts = arima(myts, c(1, 1, 0))
+summary(fit_myts)
+```
+
+Or can directly fit the original time series
+```{r}
+fit_myts2 = auto.arima(myts)
+summary(fit_myts2)
+```
+
+# Part 3
+
+## Part 3(a)
+```{r}
+forecast_myts = forecast(fit_myts, h=36, level=0.95)
+plot(forecast_myts, col=4, las=1)
+abline(v=c(1, 600, 636), lty="dotted", col=4)
+lines(601:636, ts_sim[601:636], lty="dotted", col="red")
+# red is observation and blue is prediction
+```
+
+## Part 3(b)
+```{r}
+# since it is one step ahead predictin, so we need use for loop
+pred_df <- data.frame(NULL)
+for(t in 600:636){
+  pred_onestep <- forecast(ts_sim[1:t], h=1, level=0.95, model = fit_myts)
+  pred_df <- rbind(pred_df, data.frame(mean = pred_onestep$mean[1], lower = pred_onestep$lower[1], upper = pred_onestep$upper[1]))
+}
+```
+
+```{r}
+plot(ts_sim, col=4, las=1)
+abline(v=c(1, left, right), lty="dotted", col=4)
+
+lines(it, pred_df$mean, col = 'red')
+lines(it, pred_df$lower, col = 'green')
+lines(it, pred_df$upper, col = 'green')
+legend(40, 40, legend=c("Observations", "Prediction", "Bounds of CI"),col=c("blue", "red", "green"),lty = 1, cex=0.8)
+```
+
+
+# Part 4
+
+Generate AR(1) model data
+```{r}
+set.seed(123)
+ts_sim = arima.sim(list(ar=0.65),n=636)
+```
+add trend in the data
+```{r}
+ts_sim=ts_sim + 0.33 + 0.15*time(ts_sim)  
+```
+Generate plots
+```{r}
+plot(ts_sim, col=4, las=1)
+abline(v=c(1, 600, 636), lty="dotted", col=4)
+```
+
+# Part 5
+
+```{r}
+myts = subset(ts_sim, subset=rep(c(TRUE, FALSE), times=c(600, 36)))
+```
+Step 1: visualize myts
+```{r}
+plot.zoo(myts, col=4, las=1, main="Time Series")
+```
+Fit trend part
+```{r}
+time = time(myts)
+reg=lm(myts~time)
+summary(reg)
+```
+
+```{r}
+plot(as.vector(time(myts)), rstudent(reg), ylab="Standardized Res.", xlab="Time", type="o")
+```
+
+```{r}
+z=rstandard(reg)
+par(mfrow=c(1,2))
+acf(z)
+pacf(z)
+```
+Remove the trend part and fit the residuals
+```{r}
+newts=ts(residuals(reg))
+```
+
+Step 6: train the model with auto.arima for newts
+
+```{r}
+fit_newts = auto.arima(newts, max.p=3, max.q=3, ic="aicc",
+                       seasonal=FALSE, stationary=TRUE, lambda=NULL, 
+                       stepwise=FALSE, approximation=FALSE
+                       )
+summary(fit_newts)
+```
+
+# Part 6
+
+## Part 6(a)
+```{r}
+prediction <- forecast(fit_newts, h=length(it), level=0.95)
+pred_df <- data.frame(time = it)
+pred_df$mean <- prediction$mean + predict(reg, newdata = data.frame(time = it))
+pred_df$lower <- prediction$lower + predict(reg, newdata = data.frame(time = it))
+pred_df$upper <- prediction$upper + predict(reg, newdata = data.frame(time = it))
+```
+
+```{r}
+plot(ts_sim, col=4, las=1)
+abline(v=c(1, left, right), lty="dotted", col=4)
+lines(it, pred_df$mean, col = 'red')
+lines(it, pred_df$lower, col = 'green')
+lines(it, pred_df$upper, col = 'green')
+legend(40, 150, legend=c("Observations", "Prediction", "Bounds of CI"),col=c("blue", "red", "green"),lty = 1, cex=0.8)
+```
+```{r}
+plot(it, ts_sim[it], col=4, las=1, type = 'l')
+abline(v=c(left, right), lty="dotted", col=4)
+lines(it, pred_df$mean, col = 'red')
+lines(it, pred_df$lower, col = 'green')
+lines(it, pred_df$upper, col = 'green')
+legend(left, 128, legend=c("Observations", "Prediction", "Bounds of CI"),col=c("blue", "red", "green"),lty = 1, cex=0.8)
+```
+## Part 6(b)
+Predict the residuls part
+```{r}
+# since it is one step ahead predictin, so we need use for loop
+
+# generate the residuals
+rests <- ts_sim - predict(reg, newdata = data.frame(time = time(ts_sim)))
+
+pred_df <- data.frame(NULL)
+for(t in it){
+  pred_onestep <- forecast(rests[1:t], h=1, level=0.95, model = fit_newts)
+  pred_df <- rbind(pred_df, data.frame(mean = pred_onestep$mean[1], lower = pred_onestep$lower[1], upper = pred_onestep$upper[1]))
+}
+```
+
+add predicted trend back
+```{r}
+pred_df$mean <- pred_df$mean + predict(reg, newdata = data.frame(time = it))
+pred_df$lower <- pred_df$lower + predict(reg, newdata = data.frame(time = it))
+pred_df$upper <- pred_df$upper + predict(reg, newdata = data.frame(time = it))
+```
+
+plot pred, obs and CI
+
+```{r}
+plot(ts_sim, col=4, las=1)
+abline(v=c(1, 600, 636), lty="dotted", col=4)
+lines(it, pred_df$mean, col = 'red')
+lines(it, pred_df$lower, col = 'green')
+lines(it, pred_df$upper, col = 'green')
+legend(40, 120, legend=c("Observations", "Prediction", "Bounds of CI"),col=c("blue", "red", "green"),lty = 1, cex=0.8)
+```
+
+```{r}
+plot(it, ts_sim[it], col=4, las=1, type = 'l')
+abline(v=c(600, 636), lty="dotted", col=4)
+lines(it, pred_df$mean, col = 'red')
+lines(it, pred_df$lower, col = 'green')
+lines(it, pred_df$upper, col = 'green')
+legend(left, 130, legend=c("Observations", "Prediction", "Bounds of CI"),col=c("blue", "red", "green"),lty = 1, cex=0.8)
+```
+
+## Part 7
+
+```{r}
+#(a)
+data = read.csv('TSLA1.csv')
+
+library(forecast)
+library(zoo)
+library(tseries)
+TSLA = data$Close
+time = as.Date(data$Date, format = '%m/%d/%y')
+df = data.frame(datefield = time, TSLA = TSLA)
+TSLA_stock = with(df, zoo(TSLA, order.by = time))
+plot.zoo(TSLA_stock, col=4, las=1, main="TSLA")
+
+# Use the closing price to get log return
+log_return = na.omit(diff(log(data$Close))) # log return
+time = as.Date(data$Date, format = '%m/%d/%y')[-1]
+df = data.frame(datefield = time, TSLA = log_return)
+TSLA_return = with(df, zoo(TSLA, order.by = time))
+plot(df, main = "TSLA log returns")
+plot.zoo(TSLA_return, col=4, las=1, main="TSLA")
+# It seems there is no drift or a trend from the plot.
+# We can use Augmented Dickey-Fuller Test Unit Root Test for more details:
+
+library(urca)
+summary(ur.df(log_return, type='trend', lags=20, selectlags="BIC"))
+# no time trend, no drift
+
+#(b)
+tseries::adf.test(TSLA_return)
+model <- auto.arima(TSLA_return, ic = 'bic',stationary = T, trace = T)
+model # BIC = -6427.534 ARIMA(2,0,0)
+
+# (c)
+predict(model, newdata = data.frame(time = '2020-01-02'))
+# The closing price of Jan 2, 2020:
+exp(log(TSLA[1510])+TSLA_return[1509])
+```
